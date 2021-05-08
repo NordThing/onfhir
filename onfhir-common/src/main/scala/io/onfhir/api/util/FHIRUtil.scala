@@ -20,6 +20,8 @@ import org.json4s.JsonAST.{JNothing, JObject, JValue}
 import org.json4s.JsonDSL._
 import org.json4s.{JsonAST, _}
 
+import scala.util.Try
+
 object FHIRUtil {
 
   /**
@@ -758,7 +760,40 @@ object FHIRUtil {
     */
   def extractReferences(refPath:String, resource: Resource):Seq[String] = {
       applySearchParameterPath(refPath, resource)
-        .flatMap(refObj => (refObj \ FHIR_COMMON_FIELDS.REFERENCE).extractOpt[String])
+        .flatMap {
+          case o: JObject => (o \ FHIR_COMMON_FIELDS.REFERENCE).extractOpt[String].toSeq
+          case a:JArray => (a \ FHIR_COMMON_FIELDS.REFERENCE).extract[Seq[String]]
+          case _ => Nil
+        }
+  }
+
+  /**
+   * Extract FHIR canonical reference values from a resource
+   * @param refPath Path to the reference element e.g. QuestionnaireResponse.questionnaire
+   * @param resource  Resource content
+   * @return  Canonical reference e.g. http://example.com/ValueSet/x
+   */
+  def extractCanonicals(refPath:String, resource:Resource):Seq[String] = {
+    applySearchParameterPath(refPath, resource)
+      .flatMap {
+        case c:JString => Seq(c.s)
+        case a:JArray => a.extract[Seq[String]]
+      }
+  }
+
+  /**
+   * Parse FHIR canonical value and return FhirCanonicalReference if it is full url and canonical or FhirLiteralReference
+   * if it is a local reference
+   * @param v   Value of element
+   * @return
+   */
+  def parseCanonicalRef(v:JValue):FhirCanonicalReference = {
+    val canonicalUrl = v.extract[String]
+    parseCanonicalReference(canonicalUrl)
+      /*.getOrElse({
+        val (url, rtype, rid, version) = parseReferenceValue(canonicalUrl)
+        FhirLiteralReference(url, rtype, rid, version)
+      })*/
   }
 
   /**
@@ -790,7 +825,7 @@ object FHIRUtil {
         FHIRUtil.extractValueOption[String](obj, FHIR_COMMON_FIELDS.REFERENCE) match {
           case Some(fhirReferenceUrl) if fhirReferenceUrl.startsWith("#") => FhirInternalReference(fhirReferenceUrl.drop(1))
           case Some(fhirReferenceUrl) if !fhirReferenceUrl.startsWith("#") =>
-            var r = parseReferenceValue(fhirReferenceUrl)
+            val r = parseReferenceValue(fhirReferenceUrl)
             FhirLiteralReference(r._1, r._2, r._3, r._4)
           case None =>
             val referencedResourceType = FHIRUtil.extractValueOption[String](obj, FHIR_COMMON_FIELDS.TYPE)
@@ -829,7 +864,8 @@ object FHIRUtil {
           val url = parts.dropRight(2).mkString("/")
           (Some(url), rtype, rid, None)
         }
-      case _ => throw new Exception("Invalid reference value")
+      case _ =>
+        throw new Exception("Invalid reference value")
     }
   }
 
